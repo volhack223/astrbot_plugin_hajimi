@@ -1,0 +1,60 @@
+{
+  "max_cache_mb": {
+    "description": "本地多媒体缓存上限 (MB)",
+    "type": "int",
+    "default": 300,
+    "slider": {
+      "min": 50,
+      "max": 5000,
+      "step": 50
+    },
+    "hint": "media_cache 目录保留的最大空间（默认 300MB）。超出后自动按时间从早到晚删除旧图片/视频/GIF缓存；设为 0 则不自动清理。"
+  },
+  "default_model": {
+    "description": "默认网页端模型",
+    "type": "string",
+    "default": "gemini-hydrogen",
+    "options": [
+      "gemini-hydrogen",
+      "gemini-flash-lite",
+      "gemini-pro",
+      "gemini-argon"
+    ],
+    "labels": [
+      "Gemini 4 Hydrogen (默认均衡主力)",
+      "Flash-Lite (极速轻量)",
+      "Pro / Thinking (深度推理与创作)",
+      "Gemini 4 Argon (长程/实验特调)"
+    ],
+    "hint": "启动或打开新对话时在 Gemini 网页端默认选用的模型。"
+  },
+  "media_timeout": {
+    "description": "多媒体生成最大等待超时 (秒)",
+    "type": "int",
+    "default": 240,
+    "slider": {
+      "min": 60,
+      "max": 600,
+      "step": 30
+    },
+    "hint": "生图/视频/音乐生成时的最长等待秒数；普通文字对话会自动检测流式输出结束并秒回。"
+  },
+  "proxy": {
+    "description": "浏览器代理地址",
+    "type": "string",
+    "default": "http://192.168.33.133:7890",
+    "hint": "Chromium 访问 Google Gemini 使用的 HTTP/SOCKS5 代理地址，留空表示直连。"
+  },
+  "headless": {
+    "description": "Chromium 无头模式运行",
+    "type": "bool",
+    "default": true,
+    "hint": "NAS / Linux 容器环境下请保持开启 (true)。"
+  },
+  "admin_qqs": {
+    "description": "主人 QQ 号列表",
+    "type": "list",
+    "default": [],
+    "hint": "允许执行网页登录、Cookie 注入、修改代理等管理指令的 QQ 号列表。"
+  }
+}
