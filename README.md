@@ -1,5 +1,6 @@
 # AstrBot Plugin Hajimi (姬咪奈)
 
+白嫖网页端gemini
 🐾 **`astrbot_plugin_hajimi`** 是一个专为 [AstrBot](https://github.com/AstrBot-Dev/AstrBot) 设计的 **Gemini 真实浏览器拟人操作与多模态创作插件**。
 
 ps：自己自行去整一个gemini的会员。自行去搜JIO，PIXEL，学生认证等免费会员来用，我这里就不教了。
