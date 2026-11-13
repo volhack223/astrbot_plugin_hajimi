@@ -167,11 +167,11 @@ WEB_MODEL_KEYWORDS = {
 STYLE_PRESETS: Dict[str, Tuple[str, str, str]] = {
     "换头": (
         "image", "🔄 智能换头/融图",
-        "Please extract the face and head features from the second attached image (avatar reference) and seamlessly blend/replace them onto the main person in the first image, perfectly matching the original lighting, angle, clothing, and background."
+        "Please extract the face and head features from the SECOND attached image (avatar reference) and seamlessly blend/replace them onto the main person in the FIRST attached image (base scene), perfectly matching the original lighting, angle, clothing, and background."
     ),
     "换脸": (
         "image", "🔄 智能换脸/融图",
-        "Please extract the face and head features from the second attached image (avatar reference) and seamlessly blend/replace them onto the main person in the first image, perfectly matching the original lighting, angle, clothing, and background."
+        "Please extract the face and head features from the SECOND attached image (avatar reference) and seamlessly blend/replace them onto the main person in the FIRST attached image (base scene), perfectly matching the original lighting, angle, clothing, and background."
     ),
     "素描": (
         "image", "✏️ 铅笔素描",
@@ -399,8 +399,8 @@ STEALTH_INIT_SCRIPT = """
 @register(
     "astrbot_plugin_hajimi",
     "fnos_user",
-    "Gemini真实浏览器拟人操作多模态与文本对话插件(支持Hydrogen默认模型+LRU自动缓存清理+纯文本问答+主人鉴权)",
-    "3.6.0"
+    "Gemini真实浏览器拟人操作多模态与文本对话插件(修复引用图片与@群友头像上传+Hydrogen默认模型+LRU缓存清理+QQ排版)",
+    "3.6.2"
 )
 class HajimiPlugin(Star):
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
@@ -436,11 +436,9 @@ class HajimiPlugin(Star):
         self._intercepted_media: List[Tuple[bytes, str, str]] = []
         self._capturing_media: bool = False
 
-        # 记录最近一次生成的本地媒体文件与模式，便于 `hajimi 发送` 随时补发
         self.last_generated_files: List[Tuple[str, str]] = []
         self.last_generated_mode: str = "image"
 
-        # 启动时立即按上限清理一次超额多媒体缓存
         self._cleanup_media_cache()
 
         try:
@@ -451,7 +449,6 @@ class HajimiPlugin(Star):
 
     # ==================== 本地多媒体缓存空间自动管理 (LRU) ====================
     def _get_max_cache_mb(self) -> int:
-        """优先读取 AstrBot WebUI 设置中的 max_cache_mb，其次读取本地配置，默认 300MB"""
         val = None
         if isinstance(self.astrbot_config, dict) and self.astrbot_config.get("max_cache_mb") is not None:
             val = self.astrbot_config.get("max_cache_mb")
@@ -463,7 +460,6 @@ class HajimiPlugin(Star):
             return 300
 
     def _get_media_cache_stats(self) -> Tuple[int, int]:
-        """返回 (文件总数, 总字节数)"""
         total_files = 0
         total_bytes = 0
         if not os.path.isdir(self.cache_dir):
@@ -483,11 +479,6 @@ class HajimiPlugin(Star):
         return total_files, total_bytes
 
     def _cleanup_media_cache(self, protected_paths: Optional[List[str]] = None) -> Tuple[int, int, int]:
-        """
-        自动 LRU 清理 media_cache 目录：
-        当总占用超过 max_cache_mb (默认 300MB) 时，按修改时间从旧到新删除文件，直到总大小 <= 上限。
-        返回: (删除文件数, 释放字节数, 清理后剩余总字节数)
-        """
         max_mb = self._get_max_cache_mb()
         if not os.path.isdir(self.cache_dir):
             return 0, 0, 0
@@ -513,14 +504,11 @@ class HajimiPlugin(Star):
 
         before_bytes = total_bytes
         protected_set = {os.path.abspath(p) for p in (protected_paths or []) if p}
-
-        # 按修改时间升序排序（最旧的文件排在最前面优先清理）
         entries.sort(key=lambda item: item[2])
 
         deleted_count = 0
         freed_bytes = 0
 
-        # 第一轮：优先清理非受保护的旧文件
         for fp, fsize, _ in entries:
             if total_bytes <= limit_bytes:
                 break
@@ -534,7 +522,6 @@ class HajimiPlugin(Star):
             except OSError as e:
                 logger.debug(f"[Hajimi 缓存清理] 删除文件跳过 ({fp}): {e}")
 
-        # 同步剔除已被清理的 last_generated_files 记录
         if self.last_generated_files:
             self.last_generated_files = [(fn, fp) for fn, fp in self.last_generated_files if os.path.exists(fp)]
 
@@ -575,12 +562,10 @@ class HajimiPlugin(Star):
             except Exception as e:
                 logger.warning(f"[Hajimi] 读取配置文件失败，使用默认配置: {e}")
 
-        # 合并 AstrBot WebUI 插件配置面板中的参数（若已设置）
         if isinstance(self.astrbot_config, dict):
             for key in ("max_cache_mb", "default_model", "media_timeout", "proxy", "headless", "admin_qqs"):
                 if key in self.astrbot_config and self.astrbot_config[key] is not None:
                     val = self.astrbot_config[key]
-                    # 仅当 WebUI 中非默认空值或明确配置时同步
                     if key == "admin_qqs" and not val and default_cfg.get("admin_qqs"):
                         self.astrbot_config["admin_qqs"] = list(default_cfg["admin_qqs"])
                         continue
@@ -588,7 +573,6 @@ class HajimiPlugin(Star):
                         continue
                     default_cfg[key] = val
 
-        # 自动将旧配置的 gemini-flash 迁移为最新的 gemini-hydrogen
         default_cfg["default_model"] = self._normalize_model_name(default_cfg.get("default_model", "gemini-hydrogen"))
         self._save_config_dict(default_cfg)
         return default_cfg
@@ -628,7 +612,6 @@ class HajimiPlugin(Star):
         self.config["persistent_chat_url"] = self.persistent_chat_url
         self._save_config_dict(self.config)
 
-        # 同步写回 AstrBotConfig（如可用）
         if isinstance(self.astrbot_config, dict):
             try:
                 self.astrbot_config["admin_qqs"] = list(self.admin_qqs)
@@ -641,11 +624,6 @@ class HajimiPlugin(Star):
                 pass
 
     def _is_master(self, event: AstrMessageEvent) -> bool:
-        """
-        判断当前发送指令的用户是否为主人（管理员）：
-        1. 若 AstrBot 框架已将该用户设为 admin (event.is_admin() == True)，直接放行；
-        2. 若发送者 QQ 号在 admin_qqs 列表中，直接放行。
-        """
         try:
             if hasattr(event, "is_admin") and callable(event.is_admin) and event.is_admin():
                 return True
@@ -661,7 +639,6 @@ class HajimiPlugin(Star):
         while True:
             await asyncio.sleep(1200)
             try:
-                # 定期清理超出设定上限的多媒体缓存
                 await asyncio.to_thread(self._cleanup_media_cache)
 
                 if self._task_running or self._page_op_lock.locked():
@@ -1039,7 +1016,6 @@ class HajimiPlugin(Star):
                     if "gemini.google.com/app" in self.page.url:
                         self.persistent_chat_url = self.page.url
                         self._save_config()
-                    # 启动后自动对齐默认模型（如 Gemini 4 Hydrogen）
                     await self._switch_web_model_if_needed(self.page, self.current_model)
                     await self._save_live_browser_state()
                     logger.info(f"🎉 [Hajimi 浏览器] Gemini 网页端登录成功！当前绑定会话: {self.persistent_chat_url} | 默认模型: {self.current_model}")
@@ -1175,7 +1151,6 @@ class HajimiPlugin(Star):
             if picker_btn is not None:
                 cur_btn_raw = (await picker_btn.inner_text()).strip()
                 cur_btn_low = cur_btn_raw.lower()
-                # 如果当前按钮文字已经匹配目标模型，直接跳过点击
                 if target_model == "gemini-hydrogen" and "hydrogen" in cur_btn_low and "lite" not in cur_btn_low:
                     return True, cur_btn_raw.splitlines()[0].strip()
                 if target_model == "gemini-flash-lite" and "lite" in cur_btn_low:
@@ -1366,82 +1341,309 @@ class HajimiPlugin(Star):
                 pass
             return None, f"查询额度异常: {e}"
 
-    async def _upload_files_to_page(self, page: Page, file_paths: List[str]):
-        if not file_paths:
-            return
+    async def _count_attached_previews_in_input(self, page: Page) -> int:
+        """统计 Gemini 输入框区域当前已成功挂载的参考图/附件缩略图数量"""
         try:
-            file_input = page.locator('input[type="file"]')
-            if await file_input.count() > 0:
-                await file_input.first.set_input_files(file_paths)
-                logger.info(f"📎 [Hajimi 浏览器] 已通过 input[type=file] 直接挂载 {len(file_paths)} 张参考图")
-                await asyncio.sleep(2.5)
-                return
+            return await page.evaluate("""() => {
+                const inputRoots = document.querySelectorAll(
+                    'input-area-v2, .input-area-container, .text-input-field, uploader, form'
+                );
+                let count = 0;
+                const seen = new Set();
+                const scan = (root) => {
+                    root.querySelectorAll(
+                        'img[src^="blob:"], img[src^="data:"], ' +
+                        '.image-preview img, [data-test-id*="image-preview"] img, ' +
+                        'uploader-file-preview img, .file-preview img, ' +
+                        'button[aria-label*="Remove" i], button[aria-label*="移除" i], button[aria-label*="删除附件" i]'
+                    ).forEach(el => {
+                        if (el.offsetParent === null) return;
+                        if (el.tagName === 'IMG') {
+                            const src = el.src || '';
+                            if (src.includes('avatar') || src.includes('gstatic.com') || src.includes('favicon')) return;
+                            if (!seen.has(src)) {
+                                seen.add(src);
+                                count++;
+                            }
+                        } else {
+                            // Remove 按钮通常每个附件对应一个
+                            if (!seen.has(el)) {
+                                seen.add(el);
+                                count++;
+                            }
+                        }
+                    });
+                };
+                if (inputRoots.length > 0) {
+                    inputRoots.forEach(scan);
+                } else {
+                    scan(document);
+                }
+                return count;
+            }""")
+        except Exception:
+            return 0
 
+    async def _upload_files_to_page(self, page: Page, file_paths: List[str]) -> bool:
+        """
+        向 Gemini 网页端上传参考图，并强制验证输入框内已出现图片缩略图预览：
+        1. 优先模拟真人点击 `+` (Add files / 添加文件) -> `上传文件` / `Upload files` 触发 file_chooser；
+        2. 若未触发，再使用最新的 `input[type=file]` 注入并触发 change 事件；
+        3. 轮询等待输入框内出现附件缩略图且加载完成（最多 12 秒），确保不会发出空附件消息。
+        """
+        if not file_paths:
+            return True
+
+        before_preview_cnt = await self._count_attached_previews_in_input(page)
+        uploaded_triggered = False
+
+        try:
+            # 方式 1：优先模拟真人点击 `+` 按钮 -> 选择「上传文件 / Upload files」
             upload_btn_selectors = [
+                'button[aria-label*="Add files" i]',
+                'button[aria-label*="添加文件" i]',
                 'button[aria-label*="Upload" i]',
-                'button[aria-label*="Add" i]',
                 'button[aria-label*="上传" i]',
+                'button[aria-label*="Add" i]',
                 'button[aria-label*="添加" i]',
-                'button[mattooltip*="Upload" i]',
                 'uploader button',
+                'input-area-v2 button:has(mat-icon:has-text("add"))',
+                'input-area-v2 button:has(.google-symbols:has-text("add"))',
                 'button:has(mat-icon:has-text("add"))',
             ]
             for sel in upload_btn_selectors:
                 btn = page.locator(sel).first
                 if await btn.count() > 0 and await btn.is_visible():
                     try:
-                        async with page.expect_file_chooser(timeout=5000) as fc_info:
+                        async with page.expect_file_chooser(timeout=4500) as fc_info:
                             await btn.click()
-                            await asyncio.sleep(0.6)
+                            await asyncio.sleep(0.7)
                             sub_btn = page.locator(
-                                '[role="menuitem"]:has-text("Upload"), '
+                                '[role="menuitem"]:has-text("Upload files"), '
+                                '[role="menuitem"]:has-text("Upload file"), '
+                                '[role="menuitem"]:has-text("上传文件"), '
                                 '[role="menuitem"]:has-text("上传"), '
-                                'button:has-text("Upload file"), '
+                                'button:has-text("Upload files"), '
                                 'button:has-text("上传文件")'
                             ).first
                             if await sub_btn.count() > 0 and await sub_btn.is_visible():
                                 await sub_btn.click()
                         file_chooser = await fc_info.value
                         await file_chooser.set_files(file_paths)
-                        logger.info(f"📎 [Hajimi 浏览器] 已通过模拟点击上传按钮挂载 {len(file_paths)} 张参考图")
-                        await asyncio.sleep(2.5)
-                        return
+                        uploaded_triggered = True
+                        logger.info(f"📎 [Hajimi 浏览器] 已通过「+ -> 上传文件」菜单挂载 {len(file_paths)} 张参考图")
+                        break
                     except Exception:
-                        pass
+                        # 若弹窗已打开但未触发 chooser，按 Esc 关闭菜单以免遮挡
+                        try:
+                            await page.keyboard.press("Escape")
+                            await asyncio.sleep(0.3)
+                        except Exception:
+                            pass
 
-            if await file_input.count() > 0:
-                await file_input.first.set_input_files(file_paths)
-                await asyncio.sleep(2.5)
-                return
+            # 方式 2：回退查找页面最新的 input[type="file"] 并主动触发 change 事件
+            if not uploaded_triggered:
+                file_input = page.locator('input[type="file"]')
+                cnt = await file_input.count()
+                if cnt > 0:
+                    target_input = file_input.nth(cnt - 1)
+                    await target_input.set_input_files(file_paths)
+                    await target_input.dispatch_event("change")
+                    uploaded_triggered = True
+                    logger.info(f"📎 [Hajimi 浏览器] 已通过 input[type=file] (第 {cnt} 个) 挂载 {len(file_paths)} 张参考图")
 
-            logger.warning("⚠️ [Hajimi 浏览器] 未找到文件上传控件")
+            if not uploaded_triggered:
+                logger.warning("⚠️ [Hajimi 浏览器] 未找到任何可用的文件上传入口")
+                return False
+
+            # 轮询验证：等待输入框上方真正出现上传图片预览缩略图（最多 12 秒）
+            for _ in range(24):
+                await asyncio.sleep(0.5)
+                cur_preview_cnt = await self._count_attached_previews_in_input(page)
+                if cur_preview_cnt > before_preview_cnt:
+                    # 额外等待 1.2 秒确保本地 blob 编码与上传进度条彻底完成
+                    await asyncio.sleep(1.2)
+                    logger.info(f"✅ [Hajimi 浏览器] 已确认输入框出现 {cur_preview_cnt - before_preview_cnt} 个附件预览缩略图！")
+                    return True
+
+            logger.warning("⚠️ [Hajimi 浏览器] 已触发文件选择，但 12 秒内未检测到输入框附件预览图！")
+            return False
+
         except Exception as e:
             logger.warning(f"[Hajimi 浏览器] 上传参考图异常: {e}")
+            return False
+
+    @staticmethod
+    def _format_reply_for_qq(text: str) -> str:
+        if not text:
+            return ""
+        t = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = [line.rstrip() for line in t.split("\n")]
+        t = "\n".join(lines)
+        t = re.sub(r"\n{3,}", "\n\n", t)
+        return t.strip()
 
     async def _extract_latest_gemini_text(self, page: Page, before_resp_count: int = 0) -> str:
         try:
             text = await page.evaluate("""(beforeCount) => {
-                const cleanNodeText = (el) => {
+                const SKIP_TAGS = new Set([
+                    'BUTTON', 'SVG', 'STYLE', 'SCRIPT', 'NOSCRIPT',
+                    'MAT-ICON', 'MESSAGE-ACTIONS', 'MODEL-THOUGHTS',
+                    'SOURCE-FOOTNOTE', 'SOURCES-CAROUSEL'
+                ]);
+
+                const isIgnoredNode = (el) => {
+                    if (!el || el.nodeType !== 1) return false;
+                    if (SKIP_TAGS.has(el.tagName)) return true;
+                    if (el.matches && el.matches(
+                        '.response-footer, .actions-container, .thoughts-container, ' +
+                        '[data-test-id*="thought"], .google-symbols, .header-buttons, ' +
+                        'button, [role="button"]'
+                    )) {
+                        return true;
+                    }
+                    return false;
+                };
+
+                const serializeChildren = (parent, ctx) => {
+                    let out = '';
+                    for (const child of parent.childNodes) {
+                        out += serializeNode(child, ctx);
+                    }
+                    return out;
+                };
+
+                const serializeNode = (node, ctx) => {
+                    if (!node) return '';
+                    if (node.nodeType === 3) {
+                        return node.nodeValue || '';
+                    }
+                    if (node.nodeType !== 1 || isIgnoredNode(node)) {
+                        return '';
+                    }
+
+                    const tag = node.tagName;
+
+                    if (tag === 'BR') return '\\n';
+                    if (tag === 'HR') return '\\n\\n──────────────\\n\\n';
+
+                    if (tag === 'PRE') {
+                        const codeEl = node.querySelector('code') || node;
+                        const rawCode = (codeEl.textContent || '').replace(/^\\n+|\\n+$/g, '');
+                        let lang = '';
+                        const deco = node.closest('.code-block')?.querySelector('.code-block-decoration span, .language-label');
+                        if (deco) lang = (deco.textContent || '').trim();
+                        const header = lang ? `┌── ${lang} ──` : '┌── 代码 ──';
+                        return `\\n\\n${header}\\n${rawCode}\\n└──────────\\n\\n`;
+                    }
+
+                    if (tag === 'CODE') {
+                        const inlineCode = (node.textContent || '').trim();
+                        return inlineCode ? ` \\`${inlineCode}\\` ` : '';
+                    }
+
+                    if (tag === 'H1' || tag === 'H2') {
+                        const title = serializeChildren(node, ctx).replace(/\\s+/g, ' ').trim();
+                        return title ? `\\n\\n━━━━━━━━━━━━━━\\n【${title}】\\n` : '';
+                    }
+                    if (tag === 'H3') {
+                        const title = serializeChildren(node, ctx).replace(/\\s+/g, ' ').trim();
+                        return title ? `\\n\\n【${title}】\\n` : '';
+                    }
+                    if (tag === 'H4' || tag === 'H5' || tag === 'H6') {
+                        const title = serializeChildren(node, ctx).replace(/\\s+/g, ' ').trim();
+                        return title ? `\\n\\n▸ ${title}\\n` : '';
+                    }
+
+                    if (tag === 'BLOCKQUOTE') {
+                        const inner = serializeChildren(node, ctx).trim();
+                        if (!inner) return '';
+                        const quoted = inner.split('\\n').map(l => `▎ ${l.trim()}`).join('\\n');
+                        return `\\n\\n${quoted}\\n\\n`;
+                    }
+
+                    if (tag === 'TABLE') {
+                        const rows = Array.from(node.querySelectorAll('tr'));
+                        if (rows.length === 0) return '';
+                        const formattedRows = rows.map((tr) => {
+                            const cells = Array.from(tr.querySelectorAll('th, td')).map(c =>
+                                serializeChildren(c, ctx).replace(/\\s+/g, ' ').trim()
+                            );
+                            return '| ' + cells.join(' | ') + ' |';
+                        });
+                        if (formattedRows.length > 1) {
+                            const colCount = rows[0].querySelectorAll('th, td').length || 1;
+                            const sep = '| ' + Array(colCount).fill('---').join(' | ') + ' |';
+                            formattedRows.splice(1, 0, sep);
+                        }
+                        return `\\n\\n${formattedRows.join('\\n')}\\n\\n`;
+                    }
+
+                    if (tag === 'UL' || tag === 'OL') {
+                        const nextDepth = (ctx.listDepth || 0) + 1;
+                        let listOut = ctx.inListItem ? '' : '\\n';
+                        let idx = 1;
+                        for (const child of node.children) {
+                            if (child.tagName === 'LI') {
+                                listOut += serializeNode(child, {
+                                    listDepth: nextDepth,
+                                    listType: tag,
+                                    listIndex: idx,
+                                    inListItem: true
+                                });
+                                idx++;
+                            }
+                        }
+                        return listOut + (ctx.inListItem ? '' : '\\n');
+                    }
+
+                    if (tag === 'LI') {
+                        const depth = Math.max(1, ctx.listDepth || 1);
+                        const indent = '  '.repeat(depth);
+                        const bullet = ctx.listType === 'OL'
+                            ? `${ctx.listIndex || 1}. `
+                            : (depth === 1 ? '• ' : '◦ ');
+                        let itemBody = serializeChildren(node, { ...ctx, inListItem: true }).trim();
+                        itemBody = itemBody.replace(/\\n{2,}/g, `\\n${indent}  `);
+                        return `\\n${indent}${bullet}${itemBody}`;
+                    }
+
+                    if (tag === 'P') {
+                        const pText = serializeChildren(node, ctx).trim();
+                        if (!pText) return '';
+                        if (ctx.inListItem) {
+                            return `${pText}\\n`;
+                        }
+                        return `\\n\\n${pText}\\n\\n`;
+                    }
+
+                    if (tag === 'DIV' || tag === 'SECTION' || tag === 'ARTICLE') {
+                        return serializeChildren(node, ctx);
+                    }
+
+                    return serializeChildren(node, ctx);
+                };
+
+                const extractStructuredText = (el) => {
                     if (!el) return '';
-                    const clone = el.cloneNode(true);
-                    clone.querySelectorAll(
-                        'message-actions, .response-footer, button, mat-icon, .google-symbols, svg, ' +
-                        'model-thoughts, .thoughts-container, [data-test-id*="thought"]'
-                    ).forEach(n => n.remove());
-                    return (clone.innerText || '').trim();
+                    const raw = serializeNode(el, { listDepth: 0, inListItem: false });
+                    return raw
+                        .replace(/[ \\t]+\\n/g, '\\n')
+                        .replace(/\\n{3,}/g, '\\n\\n')
+                        .trim();
                 };
 
                 const containers = document.querySelectorAll('model-response, [data-message-author-role="model"]');
                 if (containers.length > 0) {
                     const lastContainer = containers[containers.length - 1];
                     const contentEl = lastContainer.querySelector('.model-response-text, message-content, .markdown') || lastContainer;
-                    const t = cleanNodeText(contentEl);
+                    const t = extractStructuredText(contentEl);
                     if (t) return t;
                 }
 
                 const msgContents = document.querySelectorAll('.model-response-text, message-content, .markdown');
                 if (msgContents.length > 0) {
-                    const t = cleanNodeText(msgContents[msgContents.length - 1]);
+                    const t = extractStructuredText(msgContents[msgContents.length - 1]);
                     if (t) return t;
                 }
 
@@ -1454,13 +1656,13 @@ class HajimiPlugin(Star):
                 for (const esel of errSelectors) {
                     const errEl = document.querySelector(esel);
                     if (errEl && errEl.offsetParent !== null) {
-                        const et = (errEl.innerText || '').trim();
+                        const et = (errEl.textContent || '').trim();
                         if (et) return et;
                     }
                 }
                 return '';
             }""", before_resp_count)
-            return (text or "").strip()
+            return self._format_reply_for_qq(text or "")
         except Exception:
             return ""
 
@@ -1477,6 +1679,7 @@ class HajimiPlugin(Star):
             "can't create",
             "cannot create",
             "can't help with",
+            "please provide the image",
             "third-party content",
             "content policy",
             "safety guidelines",
@@ -1493,6 +1696,7 @@ class HajimiPlugin(Star):
             "内容政策",
             "第三方内容",
             "请修改您的提示",
+            "请提供您希望我使用的图片",
             "出了点问题",
             "达到上限",
             "额度已用完",
@@ -1534,7 +1738,10 @@ class HajimiPlugin(Star):
             self._capturing_media = (mode != "chat")
 
             if file_paths:
-                await self._upload_files_to_page(page, file_paths)
+                upload_ok = await self._upload_files_to_page(page, file_paths)
+                if not upload_ok:
+                    self._capturing_media = False
+                    return [], "参考图片未能成功挂载到 Gemini 网页输入框中（可发送 `hajimi 截图` 检查网页状态）"
 
             input_box = page.locator(
                 'rich-textarea div[contenteditable="true"], '
@@ -1560,7 +1767,7 @@ class HajimiPlugin(Star):
             else:
                 await input_box.press("Enter")
 
-            logger.info(f"🚀 [Hajimi 浏览器] 已点击发送 (模式={mode})，正在等待 Gemini 响应...")
+            logger.info(f"🚀 [Hajimi 浏览器] 已点击发送 (模式={mode}, 附件数={len(file_paths)})，正在等待 Gemini 响应...")
 
         try:
             start_ts = time.time()
@@ -1723,9 +1930,6 @@ class HajimiPlugin(Star):
         only_last_response: bool = True,
         allow_dom_screenshot_fallback: bool = True
     ) -> List[Tuple[str, str]]:
-        """
-        从当前页面提取并保存生成的媒体文件（图片/视频/音频），并自动触发 LRU 缓存上限检查。
-        """
         saved_results: List[Tuple[str, str]] = []
         seen_hashes = set()
 
@@ -1969,22 +2173,22 @@ class HajimiPlugin(Star):
                     else:
                         raise send_err
 
-        # 发送完毕后再次检查并按设定容量清理超出上限的旧缓存
         await asyncio.to_thread(self._cleanup_media_cache, sent_paths)
 
         done_msg = custom_done_text or random.choice(DONE_REPLIES)
         await event.send(event.plain_result(done_msg))
 
     @staticmethod
-    def _split_long_text(text: str, max_len: int = 3000) -> List[str]:
-        """将超长文本按换行符智能切分为多段，避免 QQ 单条消息过长被吞"""
+    def _split_long_text(text: str, max_len: int = 2800) -> List[str]:
         if len(text) <= max_len:
             return [text]
         chunks: List[str] = []
         remaining = text
         while len(remaining) > max_len:
-            split_idx = remaining.rfind("\n", 0, max_len)
-            if split_idx < max_len // 2:
+            split_idx = remaining.rfind("\n\n", 0, max_len)
+            if split_idx < max_len // 3:
+                split_idx = remaining.rfind("\n", 0, max_len)
+            if split_idx < max_len // 3:
                 split_idx = max_len
             chunks.append(remaining[:split_idx].rstrip())
             remaining = remaining[split_idx:].lstrip("\n")
@@ -2026,29 +2230,148 @@ class HajimiPlugin(Star):
                 return ext_val
         return ".png"
 
-    def _extract_image_url(self, event: AstrMessageEvent) -> str:
-        for comp in event.message_obj.message:
-            if isinstance(comp, Image):
-                return getattr(comp, "url", "") or getattr(comp, "file", "")
-            elif isinstance(comp, Reply) and getattr(comp, "chain", None):
-                for sub_comp in comp.chain:
-                    if isinstance(sub_comp, Image):
-                        return getattr(sub_comp, "url", "") or getattr(sub_comp, "file", "")
-                    elif isinstance(sub_comp, dict) and sub_comp.get("type") == "image":
-                        data = sub_comp.get("data", {})
-                        return data.get("url") or data.get("file") or ""
-        return ""
+    # ==================== 增强版：引用图片 + 当前消息图片提取（支持 OneBot get_msg 回溯） ====================
+    @staticmethod
+    def _extract_img_from_onebot_segments(segments: Any) -> List[str]:
+        urls: List[str] = []
+        if isinstance(segments, str):
+            for m in re.finditer(r"\[CQ:image,([^\]]+)\]", segments):
+                params = m.group(1)
+                u_m = re.search(r"(?:^|,)url=([^,\]]+)", params)
+                f_m = re.search(r"(?:^|,)file=([^,\]]+)", params)
+                val = (u_m.group(1) if u_m else (f_m.group(1) if f_m else "")).replace("&amp;", "&").strip()
+                if val and val not in urls:
+                    urls.append(val)
+            return urls
 
-    def _extract_at_avatars(self, event: AstrMessageEvent, raw_text: str) -> List[Tuple[str, str]]:
-        self_id = str(getattr(event.message_obj, "self_id", ""))
-        targets = []
+        if isinstance(segments, list):
+            for seg in segments:
+                if isinstance(seg, Image):
+                    val = getattr(seg, "url", "") or getattr(seg, "file", "") or getattr(seg, "path", "")
+                    if val and val not in urls:
+                        urls.append(val)
+                elif isinstance(seg, dict):
+                    stype = seg.get("type", "")
+                    data = seg.get("data", {}) if isinstance(seg.get("data"), dict) else seg
+                    if stype == "image":
+                        val = data.get("url") or data.get("file") or data.get("path") or ""
+                        if val and val not in urls:
+                            urls.append(val)
+        return urls
+
+    async def _extract_image_urls(self, event: AstrMessageEvent) -> List[str]:
+        """
+        提取当前消息及引用消息（Reply）中的所有图片 URL/路径：
+        1. 优先读取当前消息中的 Image 组件；
+        2. 读取 Reply.chain 中的 Image 组件；
+        3. 若 Reply.chain 为空（AstrBot/NapCat 常见情况），通过 Reply.id 调用 OneBot get_msg 接口自动拉取被引用消息的原图！
+        """
+        urls: List[str] = []
+        reply_ids: List[str] = []
+
+        msg_list = getattr(event.message_obj, "message", None) or []
+        for comp in msg_list:
+            if isinstance(comp, Image):
+                val = getattr(comp, "url", "") or getattr(comp, "file", "") or getattr(comp, "path", "")
+                if val and val not in urls:
+                    urls.append(val)
+            elif isinstance(comp, Reply):
+                chain = getattr(comp, "chain", None) or getattr(comp, "message", None)
+                for u in self._extract_img_from_onebot_segments(chain):
+                    if u not in urls:
+                        urls.append(u)
+                rid = getattr(comp, "id", None) or getattr(comp, "message_id", None)
+                if rid is not None and str(rid).strip():
+                    reply_ids.append(str(rid).strip())
+            elif isinstance(comp, dict):
+                ctype = comp.get("type", "")
+                cdata = comp.get("data", {}) if isinstance(comp.get("data"), dict) else comp
+                if ctype == "image":
+                    val = cdata.get("url") or cdata.get("file") or ""
+                    if val and val not in urls:
+                        urls.append(val)
+                elif ctype == "reply":
+                    rid = cdata.get("id") or cdata.get("message_id")
+                    if rid is not None and str(rid).strip():
+                        reply_ids.append(str(rid).strip())
+
+        raw_msg = str(getattr(event.message_obj, "raw_message", "") or "")
+        if not reply_ids and raw_msg:
+            for m in re.finditer(r"\[CQ:reply,id=(-?\d+)\]", raw_msg):
+                if m.group(1) not in reply_ids:
+                    reply_ids.append(m.group(1))
+
+        # 若 Reply.chain 未携带图片，且存在被引用消息 ID，则调用 OneBot get_msg 主动拉取原消息内容
+        if not urls and reply_ids and hasattr(event, "bot") and hasattr(event.bot, "api"):
+            for rid in reply_ids:
+                for id_param in ([int(rid), rid] if rid.lstrip("-").isdigit() else [rid]):
+                    try:
+                        res = await event.bot.api.call_action("get_msg", message_id=id_param)
+                        if isinstance(res, dict):
+                            msg_payload = res.get("message") or res.get("raw_message") or res.get("data", {}).get("message")
+                            found = self._extract_img_from_onebot_segments(msg_payload)
+                            if found:
+                                urls.extend([u for u in found if u not in urls])
+                                logger.info(f"🖼️ [Hajimi 引用提取] 通过 get_msg(id={rid}) 成功提取到 {len(found)} 张被引用图片！")
+                                break
+                    except Exception as e:
+                        logger.debug(f"[Hajimi 引用提取] get_msg(id={id_param}) 尝试跳过: {e}")
+                if urls:
+                    break
+
+        if not urls and raw_msg:
+            for u in self._extract_img_from_onebot_segments(raw_msg):
+                if u not in urls:
+                    urls.append(u)
+
+        return urls
+
+    # ==================== 增强版：@群友提取（支持 At 组件 / CQ码 / 群成员昵称反查） ====================
+    async def _extract_at_avatars(self, event: AstrMessageEvent, raw_text: str) -> List[Tuple[str, str]]:
+        """
+        多通道提取被 @ 群友的 (QQ号, 昵称)：
+        1. 遍历消息链中的 At 组件（兼容 qq / target / user_id / data['qq']）；
+        2. 解析 raw_message 中的 [CQ:at,qq=...] 码；
+        3. 若用户直接打字 `@某人`（未点弹窗列表），自动通过群成员列表按群名片/昵称匹配 QQ 号。
+        """
+        self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
+        targets: List[Tuple[str, str]] = []
         seen_qq = set()
 
-        for comp in event.message_obj.message:
+        msg_list = getattr(event.message_obj, "message", None) or []
+        for comp in msg_list:
             if isinstance(comp, At):
-                qq_str = str(getattr(comp, "qq", "") or getattr(comp, "target", ""))
-                name_str = getattr(comp, "name", "") or f"用户({qq_str})"
+                cdata = getattr(comp, "data", {}) if isinstance(getattr(comp, "data", None), dict) else {}
+                qq_val = (
+                    getattr(comp, "qq", None)
+                    or getattr(comp, "target", None)
+                    or getattr(comp, "user_id", None)
+                    or cdata.get("qq")
+                    or cdata.get("user_id")
+                    or ""
+                )
+                qq_str = str(qq_val).strip()
+                name_str = str(getattr(comp, "name", "") or cdata.get("name") or f"用户({qq_str})").strip()
                 if qq_str and qq_str.isdigit() and qq_str != self_id and qq_str not in seen_qq:
+                    seen_qq.add(qq_str)
+                    targets.append((qq_str, name_str))
+            elif isinstance(comp, dict) and comp.get("type") == "at":
+                cdata = comp.get("data", {}) if isinstance(comp.get("data"), dict) else comp
+                qq_str = str(cdata.get("qq") or cdata.get("user_id") or "").strip()
+                name_str = str(cdata.get("name") or f"用户({qq_str})").strip()
+                if qq_str and qq_str.isdigit() and qq_str != self_id and qq_str not in seen_qq:
+                    seen_qq.add(qq_str)
+                    targets.append((qq_str, name_str))
+
+        raw_msg = str(getattr(event.message_obj, "raw_message", "") or "")
+        for m in re.finditer(r"\[CQ:at,([^\]]+)\]", raw_msg):
+            params = m.group(1)
+            q_m = re.search(r"(?:^|,)qq=(\d+)", params)
+            n_m = re.search(r"(?:^|,)name=([^,\]]+)", params)
+            if q_m:
+                qq_str = q_m.group(1).strip()
+                name_str = n_m.group(1).strip() if n_m else f"用户({qq_str})"
+                if qq_str != self_id and qq_str not in seen_qq:
                     seen_qq.add(qq_str)
                     targets.append((qq_str, name_str))
 
@@ -2058,13 +2381,55 @@ class HajimiPlugin(Star):
                 seen_qq.add(qq_str)
                 targets.append((qq_str, name_str))
 
+        # 兜底：若消息文本中写有 `@昵称` 但未生成结构化 At 组件，则查询群成员列表按群名片/昵称匹配
+        if not targets and "@" in raw_text:
+            mention_names = [m.group(1).strip() for m in re.finditer(r"@([^\s@]+)", raw_text) if m.group(1).strip()]
+            group_id = str(event.get_group_id() or "").strip() if hasattr(event, "get_group_id") else ""
+            if mention_names and group_id and hasattr(event, "bot") and hasattr(event.bot, "api"):
+                try:
+                    gid_param = int(group_id) if group_id.isdigit() else group_id
+                    members = await event.bot.api.call_action("get_group_member_list", group_id=gid_param)
+                    if isinstance(members, list):
+                        for m_name in mention_names:
+                            m_low = m_name.lower()
+                            matched_member = None
+                            # 先精确匹配群名片或昵称，再模糊包含匹配
+                            for mem in members:
+                                uid = str(mem.get("user_id", "")).strip()
+                                if not uid or uid == self_id:
+                                    continue
+                                card = str(mem.get("card") or "").strip()
+                                nick = str(mem.get("nickname") or "").strip()
+                                if m_low in (card.lower(), nick.lower()):
+                                    matched_member = (uid, card or nick or m_name)
+                                    break
+                            if not matched_member:
+                                for mem in members:
+                                    uid = str(mem.get("user_id", "")).strip()
+                                    if not uid or uid == self_id:
+                                        continue
+                                    card = str(mem.get("card") or "").strip()
+                                    nick = str(mem.get("nickname") or "").strip()
+                                    if (card and m_low in card.lower()) or (nick and m_low in nick.lower()):
+                                        matched_member = (uid, card or nick or m_name)
+                                        break
+                            if matched_member and matched_member[0] not in seen_qq:
+                                seen_qq.add(matched_member[0])
+                                targets.append(matched_member)
+                                logger.info(f"👥 [Hajimi 群友匹配] 已通过群成员列表将 @{m_name} 解析为 QQ={matched_member[0]}")
+                except Exception as e:
+                    logger.debug(f"[Hajimi 群友匹配] 获取群成员列表跳过: {e}")
+
         return targets
 
     async def _download_to_tempfile(self, session: aiohttp.ClientSession, url_or_path: str) -> str:
         content_type = ""
         if url_or_path.startswith("http"):
             dl_timeout = aiohttp.ClientTimeout(total=45)
-            async with session.get(url_or_path, ssl=False, timeout=dl_timeout) as resp:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            }
+            async with session.get(url_or_path, headers=headers, ssl=False, timeout=dl_timeout) as resp:
                 if resp.status != 200:
                     raise ValueError(f"下载参考图失败 HTTP {resp.status}")
                 raw_bytes = await resp.read()
@@ -2079,6 +2444,9 @@ class HajimiPlugin(Star):
             clean_path = url_or_path.replace("file://", "")
             with open(clean_path, "rb") as f:
                 raw_bytes = f.read()
+
+        if not raw_bytes or len(raw_bytes) < 512:
+            raise ValueError("下载到的参考图数据为空或损坏")
 
         ext = self._detect_media_extension(raw_bytes, content_type)
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext, dir=self.cache_dir)
@@ -2096,7 +2464,7 @@ class HajimiPlugin(Star):
         cache_limit_str = f"{max_mb}MB (超出自动清理)" if max_mb > 0 else "不限制"
 
         lines = [
-            f"🐾 姬咪全能创作与对话中心 v3.6.0",
+            f"🐾 姬咪全能创作与对话中心 v3.6.2",
             f"👉 状态：{status_str}",
             f"👉 队列：{queue_info}",
             f"👉 主人QQ：{master_info}",
@@ -2115,6 +2483,7 @@ class HajimiPlugin(Star):
             "• 强制对话前缀（跳过预设直接问答）：hajimi 对话 <问题> 或 hajimi 问 <问题>",
             "\n🎨 【图片/改图创作与预设】：",
             "• 直接描述作画：hajimi 画一张流萤的JK图",
+            "• 引用图片+换头：回复某张图并发送 hajimi 换头 @群友",
             "• 风格预设：换头 | 换脸 | 素描 | 转动漫 | 二次元 | 单色 | 像素画 | 涂鸦 | 水彩 | 赛博 | 黏土 | 贴纸",
             "🎞️ 【GIF动图预设】：照片转gif | 表情包 | 像素动图 | 涂鸦动图 | 动漫动图",
             "🎬 【视频生成预设】：动漫风格 | 像素风 | 涂鸦特效 | 电影感 | 定格动画 | 赛博霓虹",
@@ -2136,19 +2505,9 @@ class HajimiPlugin(Star):
         prompt: str,
         has_image: bool = False,
         has_at: bool = False
-    ) -> Tuple[str, str, Optional[str], str]:
-        """
-        智能意图与模式路由：
-        1. 显式对话前缀 (`对话`/`聊`/`问`/`chat`/`ask`) -> 强制进入 `chat` 模式，绕过画图预设；
-        2. 显式生图前缀 (`画图`/`生图`/`绘图`/`改图`/`draw`/`img`) -> 强制进入 `image` 模式；
-        3. 预设关键词 (`STYLE_PRESETS`) 或常驻预设 (`self.current_preset`) -> 进入对应多媒体模式；
-        4. 自然语言自动分流：
-           - 含音乐/GIF/视频/作画关键词，或携带图片/`@群友`进行改图 -> 进入对应多媒体模式；
-           - 其余常规问答（如「对比下主流大模型的功能」）-> 自动进入 `chat` 纯文本对话模式！
-        """
+    ) -> Tuple[str, str, Optional[str], str, Optional[str]]:
         text = prompt.strip()
 
-        # 1. 显式对话模式前缀：hajimi 对话/聊/问/chat/ask <问题>
         chat_prefix_match = re.match(
             r"^(?:对话|聊|聊天|问|提问|问答|chat|ask|text)(?:[:：\s]+|$)(.*)",
             text,
@@ -2156,9 +2515,8 @@ class HajimiPlugin(Star):
         )
         if chat_prefix_match:
             clean_q = chat_prefix_match.group(1).strip() or text
-            return "chat", clean_q, None, ""
+            return "chat", clean_q, None, "", None
 
-        # 2. 显式生图/改图前缀：hajimi 画图/生图/绘图/改图/draw/img <描述>
         explicit_draw_prefix = re.match(
             r"^(?:画图|生图|绘图|改图|作画|draw|img|image)(?:[:：\s]+|$)(.*)",
             text,
@@ -2166,9 +2524,8 @@ class HajimiPlugin(Star):
         )
         if explicit_draw_prefix:
             clean_draw = explicit_draw_prefix.group(1).strip() or text
-            return "image", clean_draw, None, ""
+            return "image", clean_draw, None, "", None
 
-        # 3. 匹配风格预设（开头或结尾）
         matched_preset_key = None
         for p_key in sorted(STYLE_PRESETS.keys(), key=len, reverse=True):
             pattern_start = rf"^(?:#|【)?{re.escape(p_key)}(?:】|\s+|$)(.*)"
@@ -2190,24 +2547,19 @@ class HajimiPlugin(Star):
 
         if matched_preset_key:
             mode, display_name, style_instruction = STYLE_PRESETS[matched_preset_key]
-            return mode, text, display_name, style_instruction
+            return mode, text, display_name, style_instruction, matched_preset_key
 
-        # 4. 无预设时的自然语言意图识别
         low = text.lower()
 
-        # 4.1 音乐生成意图
         if any(w in low for w in ("音乐", "歌曲", "伴奏", "作曲", "编曲", "纯音乐", "唱一首", "mp3", "lyria", "bgm", "配乐")):
-            return "music", text, None, ""
+            return "music", text, None, "", None
 
-        # 4.2 GIF 动图意图
         if any(w in low for w in ("gif", "动图", "动态图", "表情包动图", "照片转gif", "动起来")):
-            return "gif", text, None, ""
+            return "gif", text, None, "", None
 
-        # 4.3 视频生成意图（避免「对比视频大模型」等纯文本问题误触发）
         if any(w in low for w in ("生成视频", "做个视频", "制作视频", "拍一段", "短视频", "短片", "veo", "mp4", "涂鸦特效", "动画视频")):
-            return "video", text, None, ""
+            return "video", text, None, "", None
 
-        # 4.4 绘画 / 生图 / 改图意图
         draw_keywords = (
             "画一张", "画个", "画幅", "画一幅", "画只", "画条", "画名", "帮我画", "给我画", "请画", "画一个", "画出来", "画成",
             "生图", "画图", "绘图", "作画", "改图", "修图", "p图", "融图", "抠图", "换背景", "换装", "换衣服",
@@ -2215,24 +2567,21 @@ class HajimiPlugin(Star):
             "渲染图", "设计图", "logo", "图标", "jk图", "美图", "draw ", "generate an image", "create an image"
         )
         if any(w in low for w in draw_keywords) or re.search(r"(?:^|帮我|给我|请|来一张|来个|生成一张|生成个|制作一张|做一张)画", text):
-            return "image", text, None, ""
+            return "image", text, None, "", None
 
-        # 4.5 携带 @群友 时默认进行头像融图/改图
         if has_at:
-            return "image", text, None, ""
+            return "image", text, None, "", None
 
-        # 4.6 携带参考图片时，若非识图问答则默认改图，若是识图问答则走对话
         if has_image:
             qa_about_img_keywords = (
                 "是什么", "什么意思", "识别", "翻译", "总结", "提取", "ocr",
                 "看看这是", "分析", "解释", "解答", "做题", "怎么写", "介绍"
             )
             if any(w in low for w in qa_about_img_keywords):
-                return "chat", text, None, ""
-            return "image", text, None, ""
+                return "chat", text, None, "", None
+            return "image", text, None, "", None
 
-        # 4.7 其余常规提问全部路由到纯文本对话模式
-        return "chat", text, None, ""
+        return "chat", text, None, "", None
 
     # ==================== 主指令监听入口 ====================
     @filter.regex(r"(?i)^\s*(?:@\S+\s*)*[/!]?hajimi(?:\s+|$)")
@@ -2245,7 +2594,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 0. 绑定/添加主人 QQ 指令: hajimi 绑定主人 [QQ号] ====================
+        # ==================== 0. 绑定/添加主人 QQ 指令 ====================
         bind_master_match = re.match(r"^(?:绑定主人|设置主人|添加主人|admin)\s*(\d*)$", body, re.IGNORECASE)
         if bind_master_match:
             if self.admin_qqs and not self._is_master(event):
@@ -2264,7 +2613,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 0.2 本地多媒体缓存管理指令: hajimi 清理缓存 / hajimi 缓存 [MB] ====================
+        # ==================== 0.2 本地多媒体缓存管理指令 ====================
         cache_cmd_match = re.match(r"^(?:清理缓存|清空缓存|缓存清理|缓存|cache)(?:\s+(\d+))?$", body, re.IGNORECASE)
         if cache_cmd_match:
             new_limit_str = cache_cmd_match.group(1)
@@ -2292,7 +2641,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 0.5 重新发送 / 提取当前对话历史作品指令: hajimi 发送 [gif] ====================
+        # ==================== 0.5 重新发送 / 提取当前对话历史作品指令 ====================
         resend_match = re.match(r"^(?:发送|重发|补发|提取|resend|send)(?:\s+(gif|动图|视频|video|音乐|music))?$", body, re.IGNORECASE)
         if resend_match:
             sub_type = (resend_match.group(1) or "").strip().lower()
@@ -2339,7 +2688,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 1. 网页交互式原生登录入口（仅限主人）: hajimi 登录 / login ====================
+        # ==================== 1. 网页交互式原生登录入口（仅限主人） ====================
         if body.lower() in {"登录", "login", "signin", "网页登录"}:
             if not self._is_master(event):
                 yield event.plain_result("😾 哼！只有姬咪的主人才能操作网页登录喵~（若你是主人但尚未绑定，请先发一次 `hajimi 绑定主人`）🐾")
@@ -2411,7 +2760,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 1.5 快捷查看剩余额度与周限额指令: hajimi 额度 ====================
+        # ==================== 1.5 快捷查看剩余额度与周限额指令 ====================
         if body.lower() in {"额度", "限额", "用量", "用量限额", "剩余额度", "周额度", "quota", "usage", "limit"}:
             if self._task_running:
                 yield event.plain_result("🐾 姬咪正在全力处理任务中喵，为避免打断当前生成，请等当前任务完成后再查额度哦（可先发 `hajimi 截图` 看进度喵）~")
@@ -2443,7 +2792,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 2. 网页实时截图诊断指令: hajimi 截图 ====================
+        # ==================== 2. 网页实时截图诊断指令 ====================
         if body.lower() in {"截图", "screenshot", "screen", "画面", "看看网页"}:
             if not self.page or self.page.is_closed():
                 ok, info = await self._init_browser()
@@ -2477,7 +2826,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 3. 重置/新建对话窗口指令: hajimi reset / 新对话 ====================
+        # ==================== 3. 重置/新建对话窗口指令 ====================
         if body.lower() in {"reset", "重置", "新对话", "清空", "new"}:
             if self._task_running:
                 yield event.plain_result("🐾 姬咪正在执行任务中喵，请等当前任务完成后再重置对话框哦~")
@@ -2494,7 +2843,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 3.5 在线注入完整整串 Cookie（仅限主人）: hajimi rawcookie <整串Cookie> ====================
+        # ==================== 3.5 在线注入完整整串 Cookie（仅限主人） ====================
         raw_cookie_match = re.match(r"^(?:rawcookie|fullcookie|整串cookie)\s+(.+)$", body, re.IGNORECASE | re.DOTALL)
         if raw_cookie_match:
             if not self._is_master(event):
@@ -2522,7 +2871,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 3.6 远程坐标点击指令: hajimi 坐标 <X> <Y> ====================
+        # ==================== 3.6 远程坐标点击指令 ====================
         coord_match = re.match(r"^(?:坐标|xy|点坐标|clickxy)\s+(\d+)\s*[,，\s]\s*(\d+)$", body, re.IGNORECASE)
         if coord_match and self.page and not self.page.is_closed():
             if not self.is_logged_in and not self._is_master(event):
@@ -2551,7 +2900,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 3.7 远程文字点击指令: hajimi 点击 <文字> ====================
+        # ==================== 3.7 远程文字点击指令 ====================
         click_match = re.match(r"^(?:点击|click)\s+(.+)$", body, re.IGNORECASE)
         if click_match and self.page and not self.page.is_closed():
             if not self.is_logged_in and not self._is_master(event):
@@ -2590,7 +2939,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 3.8 远程输入指令（仅限主人登录使用）: hajimi 输入 <内容> ====================
+        # ==================== 3.8 远程输入指令（仅限主人登录使用） ====================
         type_match = re.match(r"^(?:输入|type)\s+(.+)$", body, re.IGNORECASE)
         if type_match and self.page and not self.page.is_closed():
             if not self._is_master(event):
@@ -2635,7 +2984,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 4. 在线注入 Cookie 并重启浏览器（仅限主人）: hajimi cookie <1PSID> [1PSIDTS] ====================
+        # ==================== 4. 在线注入 Cookie 并重启浏览器（仅限主人） ====================
         cookie_match = re.match(r"^cookie\s+(\S+)(?:\s+(\S+))?$", body, re.IGNORECASE)
         if cookie_match:
             if not self._is_master(event):
@@ -2656,7 +3005,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 5. 在线更新 Proxy 并重启浏览器（仅限主人）: hajimi proxy <http://ip:port 或 clear> ====================
+        # ==================== 5. 在线更新 Proxy 并重启浏览器（仅限主人） ====================
         proxy_match = re.match(r"^proxy\s+(\S+)$", body, re.IGNORECASE)
         if proxy_match:
             if not self._is_master(event):
@@ -2676,7 +3025,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 6. 常驻预设切换指令: hajimi 预设 <预设名/取消> ====================
+        # ==================== 6. 常驻预设切换指令 ====================
         preset_cmd_match = re.match(r"^(?:预设|preset)\s+(\S+)$", body, re.IGNORECASE)
         if preset_cmd_match:
             p_arg = preset_cmd_match.group(1).strip().lower()
@@ -2694,7 +3043,7 @@ class HajimiPlugin(Star):
             event.stop_event()
             return
 
-        # ==================== 7. 模型切换指令: hajimi 1/2/3/4 [可选后续内容] ====================
+        # ==================== 7. 模型切换指令 ====================
         switch_match = re.match(r"^(?:-m\s+|切换\s*|用\s*)?(\S+)(?:\s+(.*))?$", body, re.DOTALL)
         if switch_match:
             first_token = switch_match.group(1).lower().strip()
@@ -2749,13 +3098,25 @@ class HajimiPlugin(Star):
                 next_msg = random.choice(NEXT_TASK_REPLIES)
                 await event.send(event.plain_result(next_msg))
 
-            img_url = self._extract_image_url(event)
-            at_targets = self._extract_at_avatars(event, body)
-            mode, clean_user_prompt, preset_title, style_instruction = self._parse_preset_and_mode(
+            # 异步提取当前消息或被引用消息中的原图 + @群友头像
+            img_urls = await self._extract_image_urls(event)
+            at_targets = await self._extract_at_avatars(event, body)
+            logger.info(f"🔍 [Hajimi 附件检测] 提取到原图数={len(img_urls)} | @群友数={len(at_targets)} ({at_targets})")
+
+            mode, clean_user_prompt, preset_title, style_instruction, matched_preset_key = self._parse_preset_and_mode(
                 body,
-                has_image=bool(img_url),
+                has_image=bool(img_urls),
                 has_at=bool(at_targets)
             )
+
+            # 前置校验：如果使用了「换头/换脸」预设，但既没拿到引用原图也没拿到 @群友头像，直接给出友好提示
+            if matched_preset_key in ("换头", "换脸"):
+                if not img_urls and not at_targets:
+                    yield event.plain_result("😿 姬咪没有获取到引用图片和 `@群友` 头像喵！请回复一张人物图片并发送 `hajimi 换头 @群友`（注意从弹窗点选群友哦）~🐾")
+                    return
+                if not img_urls and at_targets:
+                    yield event.plain_result("😿 姬咪已经拿到 `@群友` 的头像啦，但没有检测到被引用/附带的底图喵！请回复一张目标图片再发 `hajimi 换头 @群友` 哦~🐾")
+                    return
 
             if mode == "chat":
                 wait_msg = random.choice(WAIT_CHAT_REPLIES)
@@ -2765,7 +3126,7 @@ class HajimiPlugin(Star):
                     wait_msg = random.choice(WAIT_MUSIC_REPLIES)
                 elif mode in ("video", "gif"):
                     wait_msg = random.choice(WAIT_VIDEO_REPLIES)
-                elif img_url or at_targets:
+                elif img_urls or at_targets:
                     wait_msg = random.choice(WAIT_EDIT_REPLIES)
                 else:
                     wait_msg = random.choice(WAIT_DRAW_REPLIES)
@@ -2777,7 +3138,6 @@ class HajimiPlugin(Star):
                 wait_msg = f"{wait_msg}\n{cost_hint}"
                 await event.send(event.plain_result(wait_msg))
 
-                # 在每次进行生图/视频等创作指令前，自动打开一个新的对话框 (goto /app) 并确保模型对齐
                 if self.page and not self.page.is_closed():
                     try:
                         async with self._page_op_lock:
@@ -2789,44 +3149,58 @@ class HajimiPlugin(Star):
                     except Exception as e:
                         logger.warning(f"[Hajimi 浏览器] 每次创作前自动打开新对话框异常: {e}")
 
+            # 统一附件顺序：
+            # 1) 当同时有「底图 (img_urls)」和「@群友头像 (at_targets)」时：
+            #    第 1 张上传 = 底图 (main_tmp)，第 2 张上传 = @群友头像 (avatar_tmp)，与 STYLE_PRESETS["换头"] 完全一致！
             req_timeout = aiohttp.ClientTimeout(total=60)
             async with aiohttp.ClientSession(timeout=req_timeout) as session:
-                if img_url and at_targets:
+                if img_urls and at_targets:
+                    main_tmp = await self._download_to_tempfile(session, img_urls[0])
+                    temp_files.append(main_tmp)
+
                     target_qq, target_name = at_targets[0]
                     qq_avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={target_qq}&s=640"
                     avatar_tmp = await self._download_to_tempfile(session, qq_avatar_url)
                     temp_files.append(avatar_tmp)
 
-                    main_tmp = await self._download_to_tempfile(session, img_url)
-                    temp_files.append(main_tmp)
+                    replaced_prompt = re.sub(
+                        r"@[^\(\s]+\(\d+\)|@\S+",
+                        "the person shown in the SECOND attached image (avatar reference)",
+                        clean_user_prompt
+                    ).strip()
 
-                    try:
-                        replaced_prompt = re.sub(
-                            r"@[^\(\s]+\(\d+\)|@\S+",
-                            "the character/person shown in the first image (avatar reference)",
-                            clean_user_prompt
-                        ).strip() or "Integrate the character from the first image into the second image."
-
+                    if matched_preset_key in ("换头", "换脸"):
                         base_prompt = (
                             f"{replaced_prompt}\n"
-                            f"(Important: The FIRST attached image is the character reference of '{target_name}'. "
-                            f"The SECOND attached image is the base target scene. "
-                            f"Please extract the face and head features from the FIRST image and seamlessly blend/replace them onto the main person in the SECOND image!)"
-                        )
-                    except Exception as avatar_err:
-                        logger.warning(f"[Hajimi] 获取群友头像失败，退化为单图处理: {avatar_err}")
-                        base_prompt = clean_user_prompt
-                elif not img_url and at_targets:
-                    target_qq, _ = at_targets[0]
+                            f"(Important: The FIRST attached image is the base target scene. "
+                            f"The SECOND attached image is the face/head reference of '{target_name}'. "
+                            f"Please extract the face and head features from the SECOND image and seamlessly blend/replace them onto the main person in the FIRST image!)"
+                        ).strip()
+                    else:
+                        base_prompt = (
+                            f"{replaced_prompt or 'Combine the character from the second image into the first image.'}\n"
+                            f"(Important: The FIRST attached image is the base scene, and the SECOND attached image is the character reference of '{target_name}'.)"
+                        ).strip()
+
+                elif not img_urls and at_targets:
+                    target_qq, target_name = at_targets[0]
                     qq_avatar_url = f"https://q1.qlogo.cn/g?b=qq&nk={target_qq}&s=640"
                     avatar_tmp = await self._download_to_tempfile(session, qq_avatar_url)
                     temp_files.append(avatar_tmp)
-                    replaced_prompt = re.sub(r"@[^\(\s]+\(\d+\)|@\S+", "the character in this image", clean_user_prompt).strip()
+
+                    replaced_prompt = re.sub(
+                        r"@[^\(\s]+\(\d+\)|@\S+",
+                        f"the character '{target_name}' shown in this attached avatar image",
+                        clean_user_prompt
+                    ).strip()
                     base_prompt = replaced_prompt or "Transform the character shown in this attached image."
-                elif img_url:
-                    main_tmp = await self._download_to_tempfile(session, img_url)
-                    temp_files.append(main_tmp)
+
+                elif img_urls:
+                    for u in img_urls[:2]:
+                        main_tmp = await self._download_to_tempfile(session, u)
+                        temp_files.append(main_tmp)
                     base_prompt = clean_user_prompt or ("请分析并描述这张图片的内容。" if mode == "chat" else "Please process and transform this attached image.")
+
                 else:
                     base_prompt = clean_user_prompt
 
@@ -2854,9 +3228,8 @@ class HajimiPlugin(Star):
             clean_reply = re.sub(r"<think>.*?</think>", "", reply_text or "", flags=re.DOTALL).strip()
 
             if mode == "chat":
-                # 纯文本对话模式：直接将 Gemini 网页回复全文转发到 QQ
                 if clean_reply:
-                    for chunk in self._split_long_text(clean_reply, max_len=3000):
+                    for chunk in self._split_long_text(clean_reply, max_len=2800):
                         await event.send(event.plain_result(chunk))
                     if saved_media_list:
                         self.last_generated_files = list(saved_media_list)
@@ -2870,7 +3243,6 @@ class HajimiPlugin(Star):
                     fail_msg = random.choice(FAIL_REPLIES).format(reason="网页端超时未返回文字回复，可发「hajimi 截图」查看当前画面喵")
                     yield event.plain_result(fail_msg)
             else:
-                # 多媒体创作模式：发送生成的图片/GIF/视频/音乐
                 if saved_media_list:
                     self.last_generated_files = list(saved_media_list)
                     self.last_generated_mode = mode
