@@ -137,3 +137,6 @@ playwright install --with-deps chromium
    A：说明您的 Cookie 已失效或未正确绑定根凭证。建议重新执行 `hajimi 根凭证` 与 `hajimi rawcookie` 绑定最新凭证。
 2. **Q：生成的视频或 GIF 动图文件很大怎么办？**
    A：插件内置了三档自适应 GIF 压缩器，若检测到 `ffmpeg` 工具存在，会自动将视频压缩至 `6MB` 以内的 `.gif` 动图发送（若 QQ 通道仍拒收则自动回退发送原版 `.mp4` 视频）；同时 `media_cache` 目录会在超过设定容量（默认 `300MB`）后自动清理最旧的缓存文件。
+V3.6.0：首次发布
+V3.6.1：改善对话文字排版
+V3.6.2：修复换头功能
