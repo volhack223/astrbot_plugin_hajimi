@@ -29,6 +29,7 @@ ps：自己自行去整一个gemini的会员。自行去搜JIO，PIXEL，学生�
 <img width="126" height="280" alt="43e3b0f35e94f853c17f791b951ce315" src="https://github.com/user-attachments/assets/78ada9e3-b214-4291-b57b-fe19deabf7b6" />
 <img width="126" height="280" alt="image" src="https://github.com/user-attachments/assets/b1fc270a-5ed7-4383-bb34-dcff9b9baad7" />
 <img width="125" height="85" alt="image" src="https://github.com/user-attachments/assets/b42157dc-41da-483a-9afd-f149f15d9160" />
+<img width="126" height="280" alt="66127bb0c04c19e36120d36d9592c15e" src="https://github.com/user-attachments/assets/4ec1c907-fd50-40be-8e51-75f776b7b989" />
 
 ---
 
